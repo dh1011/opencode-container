@@ -104,6 +104,27 @@ Then run:
 docker compose run --rm opencode
 ```
 
+## Automated Updates
+
+This repository includes a GitHub Actions workflow that automatically:
+
+1. **Runs monthly** (1st of each month at 00:00 UTC)
+2. **Checks** for new OpenCode releases from the official repository
+3. **Builds** a new Docker image if a new version is available
+4. **Pushes** to Docker Hub with version tag and `latest`
+5. **Creates** a GitHub release for tracking
+
+You can also trigger the workflow manually from the Actions tab.
+
+### Required Secrets
+
+To enable the automated builds, add these secrets to your repository:
+
+| Secret | Description |
+|--------|-------------|
+| `DOCKERHUB_USERNAME` | Your Docker Hub username |
+| `DOCKERHUB_TOKEN` | Docker Hub access token |
+
 ## Links
 
 - [OpenCode Website](https://opencode.ai/)

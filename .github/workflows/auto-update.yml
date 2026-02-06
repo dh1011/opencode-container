@@ -1,0 +1,102 @@
+name: Auto Update OpenCode Docker Image
+
+on:
+  schedule:
+    # Run monthly on the 1st at 00:00 UTC
+    - cron: '0 0 1 * *'
+  workflow_dispatch: # Allow manual trigger
+
+env:
+  DOCKERHUB_REPO: dh1011/opencode
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest OpenCode release version
+        id: opencode_release
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/anomalyco/opencode/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "version=$LATEST_VERSION" >> $GITHUB_OUTPUT
+          echo "Latest OpenCode version: $LATEST_VERSION"
+
+      - name: Get current built version
+        id: current_version
+        run: |
+          # Try to get the version from Docker Hub
+          CURRENT_VERSION=$(curl -s "https://hub.docker.com/v2/repositories/${{ env.DOCKERHUB_REPO }}/tags?page_size=100" | jq -r '.results[].name' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || echo "0.0.0")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current Docker image version: $CURRENT_VERSION"
+
+      - name: Check if update is needed
+        id: check_update
+        run: |
+          LATEST="${{ steps.opencode_release.outputs.version }}"
+          CURRENT="${{ steps.current_version.outputs.version }}"
+          
+          if [ "$LATEST" != "$CURRENT" ] && [ "$LATEST" != "" ]; then
+            echo "needs_update=true" >> $GITHUB_OUTPUT
+            echo "New version available: $LATEST (current: $CURRENT)"
+          else
+            echo "needs_update=false" >> $GITHUB_OUTPUT
+            echo "No update needed. Current version $CURRENT is up to date."
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check_update.outputs.needs_update == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        if: steps.check_update.outputs.needs_update == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: steps.check_update.outputs.needs_update == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.DOCKERHUB_REPO }}:${{ steps.opencode_release.outputs.version }}
+            ${{ env.DOCKERHUB_REPO }}:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create GitHub Release
+        if: steps.check_update.outputs.needs_update == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.opencode_release.outputs.version }}
+          name: OpenCode ${{ steps.opencode_release.outputs.version }}
+          body: |
+            Docker image updated to OpenCode version ${{ steps.opencode_release.outputs.version }}
+            
+            ## Pull the image
+            ```bash
+            docker pull ${{ env.DOCKERHUB_REPO }}:${{ steps.opencode_release.outputs.version }}
+            # or
+            docker pull ${{ env.DOCKERHUB_REPO }}:latest
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.check_update.outputs.needs_update }}" == "true" ]; then
+            echo "✅ Successfully built and pushed OpenCode ${{ steps.opencode_release.outputs.version }}"
+            echo "Images pushed:"
+            echo "  - ${{ env.DOCKERHUB_REPO }}:${{ steps.opencode_release.outputs.version }}"
+            echo "  - ${{ env.DOCKERHUB_REPO }}:latest"
+          else
+            echo "ℹ️ No update needed. Current version is up to date."
+          fi
